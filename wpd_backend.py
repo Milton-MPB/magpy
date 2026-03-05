@@ -127,18 +127,27 @@ class WPDCanonCamera:
     def find_canon_camera(self):
         """Find Canon camera via WPD enumeration"""
         try:
-            # Generate COM interfaces if needed
+            # Try using win32com as fallback if comtypes fails
             try:
                 from comtypes.gen import PortableDeviceApi as PDA
             except ImportError:
-                # Generate the type library
+                # Try to generate the type library
                 import comtypes.client
                 try:
                     # Generate PortableDeviceApi type library
                     comtypes.client.GetModule(('{1F001332-1A57-4934-BE31-AFFC99F4EE0A}', 1, 0))
+                    # Try importing again after generation
+                    import importlib
+                    import comtypes.gen
+                    importlib.reload(comtypes.gen)
                     from comtypes.gen import PortableDeviceApi as PDA
                 except Exception as e:
-                    raise ImportError(f"Failed to generate WPD COM interfaces: {e}")
+                    # If comtypes fails, try win32com as fallback
+                    try:
+                        import win32com.client
+                        return self._find_camera_win32com()
+                    except ImportError:
+                        raise ImportError(f"Failed to use WPD (comtypes failed and pywin32 not available): {e}")
 
             # Create device manager
             manager = CoCreateInstance(
@@ -177,6 +186,33 @@ class WPDCanonCamera:
 
         except Exception as e:
             print(f"Error finding Canon camera: {e}")
+            return None
+
+    def _find_camera_win32com(self):
+        """Fallback method using win32com instead of comtypes"""
+        try:
+            import win32com.client
+
+            # Use WMI to enumerate portable devices
+            wmi = win32com.client.GetObject("winmgmts:")
+            devices = wmi.InstancesOf("Win32_PnPEntity")
+
+            for device in devices:
+                try:
+                    if device.Name and 'canon' in device.Name.lower():
+                        # Found a Canon device
+                        # Note: win32com doesn't give us the same level of WPD access
+                        # This is just for detection
+                        print(f"Found Canon device via WMI: {device.Name}")
+                        # We can't actually use this for WPD commands, so return None
+                        # This will force fallback to other methods
+                        return None
+                except:
+                    continue
+
+            return None
+        except Exception as e:
+            print(f"Win32com detection also failed: {e}")
             return None
 
     def open(self):
