@@ -21,12 +21,11 @@ const PROPERTYKEY WPD_PROPERTY_MTP_EXT_TRANSFER_TOTAL_DATA_SIZE =
     { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 1003 };
 const PROPERTYKEY WPD_PROPERTY_MTP_EXT_TRANSFER_DATA =
     { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 1004 };
+const PROPERTYKEY WPD_PROPERTY_MTP_EXT_RESPONSE_CODE =
+    { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 1006 };
 
-// Canon PTP OpCodes
 #define OP_FAPI_TX              0x9052
 #define OP_FAPI_RX              0x9053
-
-// Shutter count memory address
 #define SHUTTER_COUNT_ADDR      0x1015
 #define SHUTTER_COUNT_LEN       10
 
@@ -81,7 +80,7 @@ HRESULT findCanonCamera(PWSTR* ppDeviceId) {
 }
 
 HRESULT SendMtpCommandWithData(IPortableDevice* pDevice, DWORD opcode, DWORD* params,
-                                DWORD paramCount, BYTE* data, DWORD dataSize) {
+                                DWORD paramCount, BYTE* data, DWORD dataSize, DWORD* outResponseCode) {
     IPortableDeviceValues* pCommandParams = NULL;
     IPortableDevicePropVariantCollection* pMtpParams = NULL;
     IPortableDeviceValues* pResults = NULL;
@@ -95,6 +94,7 @@ HRESULT SendMtpCommandWithData(IPortableDevice* pDevice, DWORD opcode, DWORD* pa
     pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_COMMON_COMMAND_ID,
                                              WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_WRITE.pid);
     pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_MTP_EXT_OPERATION_CODE, opcode);
+    pCommandParams->SetUnsignedLargeIntegerValue(WPD_PROPERTY_MTP_EXT_TRANSFER_TOTAL_DATA_SIZE, dataSize);
 
     if (params && paramCount > 0) {
         hr = CoCreateInstance(CLSID_PortableDevicePropVariantCollection, NULL, CLSCTX_INPROC_SERVER,
@@ -125,13 +125,17 @@ HRESULT SendMtpCommandWithData(IPortableDevice* pDevice, DWORD opcode, DWORD* pa
     }
 
     hr = pDevice->SendCommand(0, pCommandParams, &pResults);
+    if (SUCCEEDED(hr) && pResults && outResponseCode) {
+        pResults->GetUnsignedIntegerValue(WPD_PROPERTY_MTP_EXT_RESPONSE_CODE, outResponseCode);
+    }
+
     if (pResults) pResults->Release();
     pCommandParams->Release();
     return hr;
 }
 
 HRESULT ReceiveMtpData(IPortableDevice* pDevice, DWORD opcode, DWORD* params, DWORD paramCount,
-                       BYTE* outData, DWORD maxDataSize, DWORD* actualDataSize) {
+                       BYTE* outData, DWORD maxDataSize, DWORD* actualDataSize, DWORD* outResponseCode) {
     IPortableDeviceValues* pCommandParams = NULL;
     IPortableDevicePropVariantCollection* pMtpParams = NULL;
     IPortableDeviceValues* pResults = NULL;
@@ -145,8 +149,6 @@ HRESULT ReceiveMtpData(IPortableDevice* pDevice, DWORD opcode, DWORD* params, DW
     pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_COMMON_COMMAND_ID,
                                              WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_READ.pid);
     pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_MTP_EXT_OPERATION_CODE, opcode);
-
-    // THE FIX: Explicitly tell Windows how many bytes we want to read
     pCommandParams->SetUnsignedLargeIntegerValue(WPD_PROPERTY_MTP_EXT_TRANSFER_TOTAL_DATA_SIZE, (ULONGLONG)maxDataSize);
 
     if (params && paramCount > 0) {
@@ -168,6 +170,8 @@ HRESULT ReceiveMtpData(IPortableDevice* pDevice, DWORD opcode, DWORD* params, DW
 
     hr = pDevice->SendCommand(0, pCommandParams, &pResults);
     if (SUCCEEDED(hr) && pResults) {
+        if (outResponseCode) pResults->GetUnsignedIntegerValue(WPD_PROPERTY_MTP_EXT_RESPONSE_CODE, outResponseCode);
+
         PROPVARIANT pvData;
         PropVariantInit(&pvData);
         if (SUCCEEDED(pResults->GetValue(WPD_PROPERTY_MTP_EXT_TRANSFER_DATA, &pvData))) {
@@ -189,31 +193,20 @@ void BuildMonOpenPayload(BYTE* buffer, DWORD* outSize) {
     memcpy(buffer, "MonOpen\x00", 8);
     *(uint32_t*)(buffer + 8) = 0x00000001;
     *(uint32_t*)(buffer + 12) = 0x00000002;
-    *outSize = 60;
+    *outSize = 36; // Perfectly matched to your Wireshark payload length
 }
 
 void BuildMonReadAndGetDataPayload(BYTE* buffer, uint32_t address, uint32_t length, DWORD* outSize) {
     memset(buffer, 0, 128);
     memcpy(buffer, "MonReadAndGetData\x00", 18);
-
     *(uint32_t*)(buffer + 18) = 0x00000003;
     *(uint32_t*)(buffer + 22) = 0x00000002;
     *(uint32_t*)(buffer + 26) = 0x00000002;
-
     *(uint32_t*)(buffer + 42) = 0x00000002;
     *(uint32_t*)(buffer + 46) = address;
-
     *(uint32_t*)(buffer + 62) = 0x00000002;
     *(uint32_t*)(buffer + 66) = length;
     *outSize = 82;
-}
-
-void BuildMonClosePayload(BYTE* buffer, DWORD* outSize) {
-    memset(buffer, 0, 128);
-    memcpy(buffer, "MonClose\x00", 9);
-    *(uint32_t*)(buffer + 9) = 0x00000001;
-    *(uint32_t*)(buffer + 13) = 0x00000002;
-    *outSize = 60;
 }
 
 int main() {
@@ -221,8 +214,7 @@ int main() {
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
     PWSTR deviceId = NULL;
-    HRESULT hr = findCanonCamera(&deviceId);
-    if (FAILED(hr)) {
+    if (FAILED(findCanonCamera(&deviceId))) {
         printf("{\"success\":false,\"error\":\"No Canon camera found via WPD\"}\n");
         CoUninitialize();
         return 1;
@@ -233,71 +225,53 @@ int main() {
 
     CoCreateInstance(CLSID_PortableDevice, NULL, CLSCTX_INPROC_SERVER, IID_IPortableDevice, (VOID**)&pDevice);
     CoCreateInstance(CLSID_PortableDeviceValues, NULL, CLSCTX_INPROC_SERVER, IID_IPortableDeviceValues, (VOID**)&pClientInfo);
-
     pClientInfo->SetStringValue(WPD_CLIENT_NAME, L"MagPy FAPI Reader");
     pClientInfo->SetUnsignedIntegerValue(WPD_CLIENT_MAJOR_VERSION, 1);
 
-    hr = pDevice->Open(deviceId, pClientInfo);
-    if (FAILED(hr)) {
+    if (FAILED(pDevice->Open(deviceId, pClientInfo))) {
         printf("{\"success\":false,\"error\":\"Failed to open WPD device\"}\n");
         return 1;
     }
 
-    // Step 1: MonOpen
-    BYTE monOpenPayload[128];
+    DWORD responseCode = 0;
     DWORD payloadSize;
-    BuildMonOpenPayload(monOpenPayload, &payloadSize);
-
+    BYTE payload[128];
     DWORD fapiParams[2] = {0x00000000, 0x00000000};
-    hr = SendMtpCommandWithData(pDevice, OP_FAPI_TX, fapiParams, 2, monOpenPayload, payloadSize);
-    if (FAILED(hr)) {
-        printf("{\"success\":false,\"error\":\"MonOpen failed\"}\n");
-        return 1;
-    }
 
-    // Step 2: MonReadAndGetData (Address 0x1015)
-    BYTE monReadPayload[128];
-    BuildMonReadAndGetDataPayload(monReadPayload, SHUTTER_COUNT_ADDR, SHUTTER_COUNT_LEN, &payloadSize);
+    // Step 1: MonOpen
+    BuildMonOpenPayload(payload, &payloadSize);
+    SendMtpCommandWithData(pDevice, OP_FAPI_TX, fapiParams, 2, payload, payloadSize, &responseCode);
+    fprintf(stderr, "[DEBUG] MonOpen Response Code: 0x%04X\n", responseCode);
 
+    // Step 2: MonReadAndGetData
     DWORD fapiParamsRead[2] = {0x00000000, 0x00000001};
-    hr = SendMtpCommandWithData(pDevice, OP_FAPI_TX, fapiParamsRead, 2, monReadPayload, payloadSize);
-    if (FAILED(hr)) {
-        printf("{\"success\":false,\"error\":\"MonReadAndGetData failed\"}\n");
-        return 1;
-    }
+    BuildMonReadAndGetDataPayload(payload, SHUTTER_COUNT_ADDR, SHUTTER_COUNT_LEN, &payloadSize);
+    SendMtpCommandWithData(pDevice, OP_FAPI_TX, fapiParamsRead, 2, payload, payloadSize, &responseCode);
+    fprintf(stderr, "[DEBUG] MonRead Response Code: 0x%04X\n", responseCode);
 
-    // Give the camera processor a fraction of a second to fetch memory
-    Sleep(250);
+    Sleep(100);
 
-    // Step 3: FAPI_RX to get the response data
-    BYTE responseData[128] = {0};
+    // Step 3: FAPI_RX
+    BYTE responseData[8192] = {0};
     DWORD actualDataSize = 0;
-
     DWORD fapiRxParams[3] = {0x00000000, 0x00000000, 0x00000001};
 
-    // We are expecting EXACTLY 10 bytes back
-    hr = ReceiveMtpData(pDevice, OP_FAPI_RX, fapiRxParams, 3, responseData, SHUTTER_COUNT_LEN, &actualDataSize);
+    // Ask Windows to read up to 8192 bytes, so it doesn't fail if the camera sends a 12-byte header!
+    ReceiveMtpData(pDevice, OP_FAPI_RX, fapiRxParams, 3, responseData, 8192, &actualDataSize, &responseCode);
+    fprintf(stderr, "[DEBUG] FAPI_RX Response Code: 0x%04X. Bytes Read: %lu\n", responseCode, actualDataSize);
 
-    if (FAILED(hr) || actualDataSize < 10) {
-        printf("{\"success\":false,\"error\":\"FAPI_RX failed. HR: 0x%08lX, Received %lu bytes.\"}\n", hr, actualDataSize);
+    if (responseCode != 0x2001 || actualDataSize < 10) {
+        printf("{\"success\":false,\"error\":\"Camera rejected command. Code: 0x%04X, Bytes: %lu\"}\n", responseCode, actualDataSize);
         return 1;
     }
 
-    // Parse shutter count
     uint32_t mechanical = *(uint32_t*)(responseData + 0);
     uint32_t electronic = *(uint32_t*)(responseData + 6);
     uint32_t total = mechanical + electronic;
 
-    // Step 4: MonClose
-    BYTE monClosePayload[128];
-    BuildMonClosePayload(monClosePayload, &payloadSize);
-    SendMtpCommandWithData(pDevice, OP_FAPI_TX, fapiParams, 2, monClosePayload, payloadSize);
-
-    // Output result
     printf("{\"success\":true,\"mechanical\":%u,\"electronic\":%u,\"total\":%u,\"source\":\"WPD FAPI\"}\n",
            mechanical, electronic, total);
 
-    // Cleanup
     if (pClientInfo) pClientInfo->Release();
     if (pDevice) pDevice->Release();
     if (deviceId) CoTaskMemFree(deviceId);
