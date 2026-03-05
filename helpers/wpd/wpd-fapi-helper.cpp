@@ -267,17 +267,19 @@ int main() {
     }
 
     // Give the camera processor a fraction of a second to fetch memory
-    Sleep(100);
+    Sleep(250);
 
     // Step 3: FAPI_RX to get the response data
-    BYTE responseData[8192] = {0};
+    BYTE responseData[128] = {0};
     DWORD actualDataSize = 0;
 
     DWORD fapiRxParams[3] = {0x00000000, 0x00000000, 0x00000001};
-    hr = ReceiveMtpData(pDevice, OP_FAPI_RX, fapiRxParams, 3, responseData, sizeof(responseData), &actualDataSize);
+
+    // We are expecting EXACTLY 10 bytes back
+    hr = ReceiveMtpData(pDevice, OP_FAPI_RX, fapiRxParams, 3, responseData, SHUTTER_COUNT_LEN, &actualDataSize);
 
     if (FAILED(hr) || actualDataSize < 10) {
-        printf("{\"success\":false,\"error\":\"FAPI_RX failed. Received %lu bytes.\"}\n", actualDataSize);
+        printf("{\"success\":false,\"error\":\"FAPI_RX failed. HR: 0x%08lX, Received %lu bytes.\"}\n", hr, actualDataSize);
         return 1;
     }
 
