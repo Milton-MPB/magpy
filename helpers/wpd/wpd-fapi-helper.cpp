@@ -17,16 +17,14 @@ const PROPERTYKEY WPD_PROPERTY_MTP_EXT_OPERATION_CODE =
     { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 1001 };
 const PROPERTYKEY WPD_PROPERTY_MTP_EXT_OPERATION_PARAMS =
     { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 1002 };
+const PROPERTYKEY WPD_PROPERTY_MTP_EXT_TRANSFER_TOTAL_DATA_SIZE =
+    { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 1003 };
 const PROPERTYKEY WPD_PROPERTY_MTP_EXT_TRANSFER_DATA =
     { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 1004 };
 
 // Canon PTP OpCodes
-#define OP_SET_DEVICE_PROP      0x1016
 #define OP_FAPI_TX              0x9052
 #define OP_FAPI_RX              0x9053
-
-// Canon Properties
-#define DPROP_HOST_INFO         0xD406
 
 // Shutter count memory address
 #define SHUTTER_COUNT_ADDR      0x1015
@@ -148,6 +146,9 @@ HRESULT ReceiveMtpData(IPortableDevice* pDevice, DWORD opcode, DWORD* params, DW
                                              WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_READ.pid);
     pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_MTP_EXT_OPERATION_CODE, opcode);
 
+    // THE FIX: Explicitly tell Windows how many bytes we want to read
+    pCommandParams->SetUnsignedLargeIntegerValue(WPD_PROPERTY_MTP_EXT_TRANSFER_TOTAL_DATA_SIZE, (ULONGLONG)maxDataSize);
+
     if (params && paramCount > 0) {
         hr = CoCreateInstance(CLSID_PortableDevicePropVariantCollection, NULL, CLSCTX_INPROC_SERVER,
                               IID_IPortableDevicePropVariantCollection, (VOID**)&pMtpParams);
@@ -183,29 +184,28 @@ HRESULT ReceiveMtpData(IPortableDevice* pDevice, DWORD opcode, DWORD* params, DW
     return hr;
 }
 
-// Re-built payloads with CORRECT byte offsets to match Python struct packaging
 void BuildMonOpenPayload(BYTE* buffer, DWORD* outSize) {
     memset(buffer, 0, 128);
     memcpy(buffer, "MonOpen\x00", 8);
     *(uint32_t*)(buffer + 8) = 0x00000001;
     *(uint32_t*)(buffer + 12) = 0x00000002;
-    *outSize = 60; // 16 bytes + 44 bytes padding
+    *outSize = 60;
 }
 
 void BuildMonReadAndGetDataPayload(BYTE* buffer, uint32_t address, uint32_t length, DWORD* outSize) {
     memset(buffer, 0, 128);
     memcpy(buffer, "MonReadAndGetData\x00", 18);
 
-    *(uint32_t*)(buffer + 18) = 0x00000003; // Param count
-    *(uint32_t*)(buffer + 22) = 0x00000002; // Type
-    *(uint32_t*)(buffer + 26) = 0x00000002; // Type
-    // offset 30 to 41 is 12 bytes of padding
-    *(uint32_t*)(buffer + 42) = 0x00000002; // Type
-    *(uint32_t*)(buffer + 46) = address;    // Target Address!
-    // offset 50 to 61 is 12 bytes of padding
-    *(uint32_t*)(buffer + 62) = 0x00000002; // Type
-    *(uint32_t*)(buffer + 66) = length;     // Read Length
-    *outSize = 82; // Up to offset 70 + 12 padding
+    *(uint32_t*)(buffer + 18) = 0x00000003;
+    *(uint32_t*)(buffer + 22) = 0x00000002;
+    *(uint32_t*)(buffer + 26) = 0x00000002;
+
+    *(uint32_t*)(buffer + 42) = 0x00000002;
+    *(uint32_t*)(buffer + 46) = address;
+
+    *(uint32_t*)(buffer + 62) = 0x00000002;
+    *(uint32_t*)(buffer + 66) = length;
+    *outSize = 82;
 }
 
 void BuildMonClosePayload(BYTE* buffer, DWORD* outSize) {
@@ -243,10 +243,6 @@ int main() {
         return 1;
     }
 
-    // Step 0: Handshake (0xD406) is AUTOMATICALLY sent by Windows when pDevice->Open() is called
-    // Windows WPD handles the MTP initialization sequence, including the MTPClassDriver announcement
-    // We do NOT need to send it manually - doing so causes a deadlock!
-
     // Step 1: MonOpen
     BYTE monOpenPayload[128];
     DWORD payloadSize;
@@ -269,6 +265,9 @@ int main() {
         printf("{\"success\":false,\"error\":\"MonReadAndGetData failed\"}\n");
         return 1;
     }
+
+    // Give the camera processor a fraction of a second to fetch memory
+    Sleep(100);
 
     // Step 3: FAPI_RX to get the response data
     BYTE responseData[8192] = {0};
