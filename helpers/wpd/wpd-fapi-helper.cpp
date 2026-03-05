@@ -243,12 +243,9 @@ int main() {
         return 1;
     }
 
-    // Step 0: The Missing Handshake (0xD406)
-    // We must send the "MTPClassDriver" string so the camera doesn't lock us out
-    DWORD propParams[1] = { DPROP_HOST_INFO };
-    const WCHAR* hostInfo = L"/Windows/10.0.22631 MTPClassDriver/10.0.22621.0";
-    DWORD hostInfoSize = (wcslen(hostInfo) + 1) * sizeof(WCHAR);
-    SendMtpCommandWithData(pDevice, OP_SET_DEVICE_PROP, propParams, 1, (BYTE*)hostInfo, hostInfoSize);
+    // Step 0: Handshake (0xD406) is AUTOMATICALLY sent by Windows when pDevice->Open() is called
+    // Windows WPD handles the MTP initialization sequence, including the MTPClassDriver announcement
+    // We do NOT need to send it manually - doing so causes a deadlock!
 
     // Step 1: MonOpen
     BYTE monOpenPayload[128];
