@@ -132,11 +132,12 @@ class CanonShutterReader:
         # Method 3: Fallback to PyUSB (requires WinUSB driver)
         self.log("Trying PyUSB FAPI (requires WinUSB driver via Zadig)...")
         try:
-            # Import existing PyUSB implementation
+            # Import PyUSB implementation directly to avoid recursion
+            # Don't import read_shutter_count - call read_shutter_count_pyusb directly
             sys.path.insert(0, str(Path(__file__).parent))
-            from read_shutter_count import read_shutter_count as read_pyusb
+            from read_shutter_count import read_shutter_count_pyusb
 
-            result_dict = read_pyusb()
+            result_dict = read_shutter_count_pyusb()
 
             if result_dict:
                 result = ShutterCountResult(
@@ -176,11 +177,11 @@ class CanonShutterReader:
         self.log("Using PyUSB FAPI (native macOS/Linux support)...")
 
         try:
-            # Import existing PyUSB implementation
+            # Import PyUSB implementation directly to avoid recursion
             sys.path.insert(0, str(Path(__file__).parent))
-            from read_shutter_count import read_shutter_count as read_pyusb
+            from read_shutter_count import read_shutter_count_pyusb
 
-            result_dict = read_pyusb()
+            result_dict = read_shutter_count_pyusb()
 
             if result_dict:
                 result = ShutterCountResult(

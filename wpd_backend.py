@@ -127,16 +127,20 @@ class WPDCanonCamera:
     def find_canon_camera(self):
         """Find Canon camera via WPD enumeration"""
         try:
+            # Generate COM interfaces if needed
+            try:
+                from comtypes.gen import PortableDeviceApi as PDA
+            except ImportError:
+                # Generate the type library
+                import comtypes.client
+                try:
+                    # Generate PortableDeviceApi type library
+                    comtypes.client.GetModule(('{1F001332-1A57-4934-BE31-AFFC99F4EE0A}', 1, 0))
+                    from comtypes.gen import PortableDeviceApi as PDA
+                except Exception as e:
+                    raise ImportError(f"Failed to generate WPD COM interfaces: {e}")
+
             # Create device manager
-            manager = CoCreateInstance(
-                CLSID_PortableDeviceManager,
-                interface=comtypes.automation.IUnknown
-            )
-
-            # This is a simplified approach - in production you'd use proper COM interface definitions
-            # For now, we'll rely on the comtypes client
-            from comtypes.gen import PortableDeviceApi as PDA
-
             manager = CoCreateInstance(
                 CLSID_PortableDeviceManager,
                 interface=PDA.IPortableDeviceManager
