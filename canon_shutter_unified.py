@@ -79,11 +79,34 @@ class CanonShutterReader:
     def _read_windows(self):
         """
         Windows-specific reading with intelligent cascade.
-        Tries native methods first (WPD, EDSDK), falls back to PyUSB.
+        Tries native methods first (WPD FAPI, EDSDK), falls back to other methods.
         """
         errors = []
 
-        # Method 1: Try WPD (native Windows, no driver changes)
+        # Method 1: Try WPD FAPI (native Windows, proven protocol, no driver changes)
+        self.log("Trying WPD FAPI (MonReadAndGetData via WPD pass-through)...")
+        try:
+            from wpd_fapi_backend import read_shutter_count_wpd_fapi
+
+            result = read_shutter_count_wpd_fapi()
+
+            if result.success:
+                self.log(f"✓ Success via {result.source}")
+                return result
+            else:
+                errors.append(f"WPD FAPI: {result.error}")
+                self.log(f"✗ WPD FAPI failed: {result.error}")
+
+        except ImportError as e:
+            error_msg = f"WPD FAPI not available: {e}"
+            errors.append(error_msg)
+            self.log(f"✗ {error_msg}")
+        except Exception as e:
+            error_msg = f"WPD FAPI error: {e}"
+            errors.append(error_msg)
+            self.log(f"✗ {error_msg}")
+
+        # Method 2: Try WPD Property/Monitor (comtypes-based, may have COM issues)
         self.log("Trying WPD Property 0xD167 (Digic 8/X cameras)...")
         try:
             from wpd_backend import read_shutter_count_wpd
@@ -106,7 +129,7 @@ class CanonShutterReader:
             errors.append(error_msg)
             self.log(f"✗ {error_msg}")
 
-        # Method 2: Try EDSDK (native Windows, no driver changes)
+        # Method 3: Try EDSDK (native Windows, no driver changes, older cameras)
         self.log("Trying EDSDK helpers (pre-Digic 6 cameras)...")
         try:
             from edsdk_backend import read_shutter_count_edsdk
@@ -129,7 +152,7 @@ class CanonShutterReader:
             errors.append(error_msg)
             self.log(f"✗ {error_msg}")
 
-        # Method 3: Fallback to PyUSB (requires WinUSB driver)
+        # Method 4: Fallback to PyUSB (requires WinUSB driver)
         self.log("Trying PyUSB FAPI (requires WinUSB driver via Zadig)...")
         try:
             # Import PyUSB implementation directly to avoid recursion
