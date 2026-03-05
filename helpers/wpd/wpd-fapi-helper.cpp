@@ -5,14 +5,10 @@
 #include <PortableDeviceApi.h>
 #include <PortableDevice.h>
 
-// WPD MTP Pass-Through Command GUIDs
-const PROPERTYKEY WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITHOUT_DATA_PHASE =
-    { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 11 };
 const PROPERTYKEY WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_READ =
     { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 12 };
 const PROPERTYKEY WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_WRITE =
     { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 13 };
-
 const PROPERTYKEY WPD_PROPERTY_MTP_EXT_OPERATION_CODE =
     { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 1001 };
 const PROPERTYKEY WPD_PROPERTY_MTP_EXT_OPERATION_PARAMS =
@@ -24,8 +20,10 @@ const PROPERTYKEY WPD_PROPERTY_MTP_EXT_TRANSFER_DATA =
 const PROPERTYKEY WPD_PROPERTY_MTP_EXT_RESPONSE_CODE =
     { { 0x4d545058, 0x1a2e, 0x4106, { 0xa3, 0x57, 0x77, 0x1e, 0x08, 0x19, 0xfc, 0x56 } }, 1006 };
 
+#define OP_SET_DEVICE_PROP      0x1016
 #define OP_FAPI_TX              0x9052
 #define OP_FAPI_RX              0x9053
+#define DPROP_HOST_INFO         0xD406
 #define SHUTTER_COUNT_ADDR      0x1015
 #define SHUTTER_COUNT_LEN       10
 
@@ -45,18 +43,11 @@ HRESULT findCanonCamera(PWSTR* ppDeviceId) {
 
     DWORD deviceCount = 0;
     hr = pManager->GetDevices(NULL, &deviceCount);
-    if (FAILED(hr) || deviceCount == 0) {
-        pManager->Release();
-        return E_FAIL;
-    }
+    if (FAILED(hr) || deviceCount == 0) { pManager->Release(); return E_FAIL; }
 
     PWSTR* deviceIds = new PWSTR[deviceCount];
     hr = pManager->GetDevices(deviceIds, &deviceCount);
-    if (FAILED(hr)) {
-        delete[] deviceIds;
-        pManager->Release();
-        return hr;
-    }
+    if (FAILED(hr)) { delete[] deviceIds; pManager->Release(); return hr; }
 
     PWSTR foundDeviceId = NULL;
     for (DWORD i = 0; i < deviceCount; i++) {
@@ -72,10 +63,7 @@ HRESULT findCanonCamera(PWSTR* ppDeviceId) {
     delete[] deviceIds;
     pManager->Release();
 
-    if (foundDeviceId) {
-        *ppDeviceId = foundDeviceId;
-        return S_OK;
-    }
+    if (foundDeviceId) { *ppDeviceId = foundDeviceId; return S_OK; }
     return E_FAIL;
 }
 
@@ -85,39 +73,27 @@ HRESULT SendMtpCommandWithData(IPortableDevice* pDevice, DWORD opcode, DWORD* pa
     IPortableDevicePropVariantCollection* pMtpParams = NULL;
     IPortableDeviceValues* pResults = NULL;
 
-    HRESULT hr = CoCreateInstance(CLSID_PortableDeviceValues, NULL, CLSCTX_INPROC_SERVER,
-                                   IID_IPortableDeviceValues, (VOID**)&pCommandParams);
+    HRESULT hr = CoCreateInstance(CLSID_PortableDeviceValues, NULL, CLSCTX_INPROC_SERVER, IID_IPortableDeviceValues, (VOID**)&pCommandParams);
     if (FAILED(hr)) return hr;
 
-    pCommandParams->SetGuidValue(WPD_PROPERTY_COMMON_COMMAND_CATEGORY,
-                                  WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_WRITE.fmtid);
-    pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_COMMON_COMMAND_ID,
-                                             WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_WRITE.pid);
+    pCommandParams->SetGuidValue(WPD_PROPERTY_COMMON_COMMAND_CATEGORY, WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_WRITE.fmtid);
+    pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_COMMON_COMMAND_ID, WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_WRITE.pid);
     pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_MTP_EXT_OPERATION_CODE, opcode);
-    pCommandParams->SetUnsignedLargeIntegerValue(WPD_PROPERTY_MTP_EXT_TRANSFER_TOTAL_DATA_SIZE, dataSize);
+    pCommandParams->SetUnsignedLargeIntegerValue(WPD_PROPERTY_MTP_EXT_TRANSFER_TOTAL_DATA_SIZE, (ULONGLONG)dataSize);
 
     if (params && paramCount > 0) {
-        hr = CoCreateInstance(CLSID_PortableDevicePropVariantCollection, NULL, CLSCTX_INPROC_SERVER,
-                              IID_IPortableDevicePropVariantCollection, (VOID**)&pMtpParams);
-        if (SUCCEEDED(hr)) {
-            for (DWORD i = 0; i < paramCount; i++) {
-                PROPVARIANT pv;
-                PropVariantInit(&pv);
-                pv.vt = VT_UI4;
-                pv.ulVal = params[i];
-                pMtpParams->Add(&pv);
-            }
-            pCommandParams->SetIPortableDevicePropVariantCollectionValue(
-                WPD_PROPERTY_MTP_EXT_OPERATION_PARAMS, pMtpParams);
-            pMtpParams->Release();
+        CoCreateInstance(CLSID_PortableDevicePropVariantCollection, NULL, CLSCTX_INPROC_SERVER, IID_IPortableDevicePropVariantCollection, (VOID**)&pMtpParams);
+        for (DWORD i = 0; i < paramCount; i++) {
+            PROPVARIANT pv; PropVariantInit(&pv); pv.vt = VT_UI4; pv.ulVal = params[i];
+            pMtpParams->Add(&pv);
         }
+        pCommandParams->SetIPortableDevicePropVariantCollectionValue(WPD_PROPERTY_MTP_EXT_OPERATION_PARAMS, pMtpParams);
+        pMtpParams->Release();
     }
 
     if (data && dataSize > 0) {
-        PROPVARIANT pvData;
-        PropVariantInit(&pvData);
-        pvData.vt = VT_VECTOR | VT_UI1;
-        pvData.caub.cElems = dataSize;
+        PROPVARIANT pvData; PropVariantInit(&pvData);
+        pvData.vt = VT_VECTOR | VT_UI1; pvData.caub.cElems = dataSize;
         pvData.caub.pElems = (BYTE*)CoTaskMemAlloc(dataSize);
         memcpy(pvData.caub.pElems, data, dataSize);
         pCommandParams->SetValue(WPD_PROPERTY_MTP_EXT_TRANSFER_DATA, &pvData);
@@ -128,7 +104,6 @@ HRESULT SendMtpCommandWithData(IPortableDevice* pDevice, DWORD opcode, DWORD* pa
     if (SUCCEEDED(hr) && pResults && outResponseCode) {
         pResults->GetUnsignedIntegerValue(WPD_PROPERTY_MTP_EXT_RESPONSE_CODE, outResponseCode);
     }
-
     if (pResults) pResults->Release();
     pCommandParams->Release();
     return hr;
@@ -140,45 +115,32 @@ HRESULT ReceiveMtpData(IPortableDevice* pDevice, DWORD opcode, DWORD* params, DW
     IPortableDevicePropVariantCollection* pMtpParams = NULL;
     IPortableDeviceValues* pResults = NULL;
 
-    HRESULT hr = CoCreateInstance(CLSID_PortableDeviceValues, NULL, CLSCTX_INPROC_SERVER,
-                                   IID_IPortableDeviceValues, (VOID**)&pCommandParams);
+    HRESULT hr = CoCreateInstance(CLSID_PortableDeviceValues, NULL, CLSCTX_INPROC_SERVER, IID_IPortableDeviceValues, (VOID**)&pCommandParams);
     if (FAILED(hr)) return hr;
 
-    pCommandParams->SetGuidValue(WPD_PROPERTY_COMMON_COMMAND_CATEGORY,
-                                  WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_READ.fmtid);
-    pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_COMMON_COMMAND_ID,
-                                             WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_READ.pid);
+    pCommandParams->SetGuidValue(WPD_PROPERTY_COMMON_COMMAND_CATEGORY, WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_READ.fmtid);
+    pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_COMMON_COMMAND_ID, WPD_COMMAND_MTP_EXT_EXECUTE_COMMAND_WITH_DATA_TO_READ.pid);
     pCommandParams->SetUnsignedIntegerValue(WPD_PROPERTY_MTP_EXT_OPERATION_CODE, opcode);
     pCommandParams->SetUnsignedLargeIntegerValue(WPD_PROPERTY_MTP_EXT_TRANSFER_TOTAL_DATA_SIZE, (ULONGLONG)maxDataSize);
 
     if (params && paramCount > 0) {
-        hr = CoCreateInstance(CLSID_PortableDevicePropVariantCollection, NULL, CLSCTX_INPROC_SERVER,
-                              IID_IPortableDevicePropVariantCollection, (VOID**)&pMtpParams);
-        if (SUCCEEDED(hr)) {
-            for (DWORD i = 0; i < paramCount; i++) {
-                PROPVARIANT pv;
-                PropVariantInit(&pv);
-                pv.vt = VT_UI4;
-                pv.ulVal = params[i];
-                pMtpParams->Add(&pv);
-            }
-            pCommandParams->SetIPortableDevicePropVariantCollectionValue(
-                WPD_PROPERTY_MTP_EXT_OPERATION_PARAMS, pMtpParams);
-            pMtpParams->Release();
+        CoCreateInstance(CLSID_PortableDevicePropVariantCollection, NULL, CLSCTX_INPROC_SERVER, IID_IPortableDevicePropVariantCollection, (VOID**)&pMtpParams);
+        for (DWORD i = 0; i < paramCount; i++) {
+            PROPVARIANT pv; PropVariantInit(&pv); pv.vt = VT_UI4; pv.ulVal = params[i];
+            pMtpParams->Add(&pv);
         }
+        pCommandParams->SetIPortableDevicePropVariantCollectionValue(WPD_PROPERTY_MTP_EXT_OPERATION_PARAMS, pMtpParams);
+        pMtpParams->Release();
     }
 
     hr = pDevice->SendCommand(0, pCommandParams, &pResults);
     if (SUCCEEDED(hr) && pResults) {
         if (outResponseCode) pResults->GetUnsignedIntegerValue(WPD_PROPERTY_MTP_EXT_RESPONSE_CODE, outResponseCode);
-
-        PROPVARIANT pvData;
-        PropVariantInit(&pvData);
+        PROPVARIANT pvData; PropVariantInit(&pvData);
         if (SUCCEEDED(pResults->GetValue(WPD_PROPERTY_MTP_EXT_TRANSFER_DATA, &pvData))) {
             if (pvData.vt == (VT_VECTOR | VT_UI1)) {
-                DWORD dataSize = min(pvData.caub.cElems, maxDataSize);
-                memcpy(outData, pvData.caub.pElems, dataSize);
-                *actualDataSize = dataSize;
+                *actualDataSize = min(pvData.caub.cElems, maxDataSize);
+                memcpy(outData, pvData.caub.pElems, *actualDataSize);
             }
         }
         PropVariantClear(&pvData);
@@ -188,12 +150,33 @@ HRESULT ReceiveMtpData(IPortableDevice* pDevice, DWORD opcode, DWORD* params, DW
     return hr;
 }
 
+// ---------------------------------------------------------
+// PAYLOAD BUILDERS
+// ---------------------------------------------------------
+
+void BuildHostInfoPayload(BYTE* buffer, DWORD* outSize) {
+    const WCHAR* hostInfo = L"/Windows/10.0.22631 MTPClassDriver/10.0.22621.0";
+    size_t len = wcslen(hostInfo);
+
+    // PTP strings require a 1-byte length prefix indicating number of characters (including null)
+    buffer[0] = (BYTE)(len + 1);
+
+    // Copy the UTF-16 characters
+    memcpy(buffer + 1, hostInfo, len * 2);
+
+    // Add double-null terminator for UTF-16
+    buffer[1 + (len * 2)] = 0x00;
+    buffer[1 + (len * 2) + 1] = 0x00;
+
+    *outSize = 1 + ((len + 1) * 2); // 1 length byte + (chars + null)*2 bytes
+}
+
 void BuildMonOpenPayload(BYTE* buffer, DWORD* outSize) {
     memset(buffer, 0, 128);
     memcpy(buffer, "MonOpen\x00", 8);
     *(uint32_t*)(buffer + 8) = 0x00000001;
     *(uint32_t*)(buffer + 12) = 0x00000002;
-    *outSize = 36; // Perfectly matched to your Wireshark payload length
+    *outSize = 36;
 }
 
 void BuildMonReadAndGetDataPayload(BYTE* buffer, uint32_t address, uint32_t length, DWORD* outSize) {
@@ -206,7 +189,7 @@ void BuildMonReadAndGetDataPayload(BYTE* buffer, uint32_t address, uint32_t leng
     *(uint32_t*)(buffer + 46) = address;
     *(uint32_t*)(buffer + 62) = 0x00000002;
     *(uint32_t*)(buffer + 66) = length;
-    *outSize = 82;
+    *outSize = 86;
 }
 
 int main() {
@@ -216,29 +199,35 @@ int main() {
     PWSTR deviceId = NULL;
     if (FAILED(findCanonCamera(&deviceId))) {
         printf("{\"success\":false,\"error\":\"No Canon camera found via WPD\"}\n");
-        CoUninitialize();
-        return 1;
+        CoUninitialize(); return 1;
     }
 
     IPortableDevice* pDevice = NULL;
     IPortableDeviceValues* pClientInfo = NULL;
-
     CoCreateInstance(CLSID_PortableDevice, NULL, CLSCTX_INPROC_SERVER, IID_IPortableDevice, (VOID**)&pDevice);
     CoCreateInstance(CLSID_PortableDeviceValues, NULL, CLSCTX_INPROC_SERVER, IID_IPortableDeviceValues, (VOID**)&pClientInfo);
+
     pClientInfo->SetStringValue(WPD_CLIENT_NAME, L"MagPy FAPI Reader");
     pClientInfo->SetUnsignedIntegerValue(WPD_CLIENT_MAJOR_VERSION, 1);
+    pClientInfo->SetUnsignedIntegerValue(WPD_CLIENT_DESIRED_ACCESS, GENERIC_READ | GENERIC_WRITE);
 
     if (FAILED(pDevice->Open(deviceId, pClientInfo))) {
-        printf("{\"success\":false,\"error\":\"Failed to open WPD device\"}\n");
+        printf("{\"success\":false,\"error\":\"Failed to open WPD device with WRITE access\"}\n");
         return 1;
     }
 
     DWORD responseCode = 0;
     DWORD payloadSize;
     BYTE payload[128];
-    DWORD fapiParams[2] = {0x00000000, 0x00000000};
+
+    // Step 0: The Missing Handshake (Unlock the Camera)
+    DWORD propParams[1] = { DPROP_HOST_INFO };
+    BuildHostInfoPayload(payload, &payloadSize);
+    SendMtpCommandWithData(pDevice, OP_SET_DEVICE_PROP, propParams, 1, payload, payloadSize, &responseCode);
+    fprintf(stderr, "[DEBUG] Handshake Response Code: 0x%04X\n", responseCode);
 
     // Step 1: MonOpen
+    DWORD fapiParams[2] = {0x00000000, 0x00000000};
     BuildMonOpenPayload(payload, &payloadSize);
     SendMtpCommandWithData(pDevice, OP_FAPI_TX, fapiParams, 2, payload, payloadSize, &responseCode);
     fprintf(stderr, "[DEBUG] MonOpen Response Code: 0x%04X\n", responseCode);
@@ -249,14 +238,13 @@ int main() {
     SendMtpCommandWithData(pDevice, OP_FAPI_TX, fapiParamsRead, 2, payload, payloadSize, &responseCode);
     fprintf(stderr, "[DEBUG] MonRead Response Code: 0x%04X\n", responseCode);
 
-    Sleep(100);
+    Sleep(150);
 
     // Step 3: FAPI_RX
     BYTE responseData[8192] = {0};
     DWORD actualDataSize = 0;
     DWORD fapiRxParams[3] = {0x00000000, 0x00000000, 0x00000001};
 
-    // Ask Windows to read up to 8192 bytes, so it doesn't fail if the camera sends a 12-byte header!
     ReceiveMtpData(pDevice, OP_FAPI_RX, fapiRxParams, 3, responseData, 8192, &actualDataSize, &responseCode);
     fprintf(stderr, "[DEBUG] FAPI_RX Response Code: 0x%04X. Bytes Read: %lu\n", responseCode, actualDataSize);
 
